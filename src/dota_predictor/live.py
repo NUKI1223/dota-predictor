@@ -25,12 +25,18 @@ import time
 from pathlib import Path
 
 import httpx
-import numpy as np
 
 from dota_predictor.ingest.odds import implied_prob
 from dota_predictor.llm.context import ContextStore
+from dota_predictor.models.ingame import (
+    heuristic_probability,
+    load_ingame_model,
+    model_probability,
+)
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
+_ingame_model = load_ingame_model()
 
 
 def fetch_live() -> list[dict]:
@@ -43,15 +49,11 @@ def fetch_live() -> list[dict]:
     ]
 
 
-def gold_logit_shift(gold_lead: float, game_time: float) -> float:
-    """Heuristic: a 1k-gold lead is worth ~0.04 logits early, ~0.10 late."""
-    per_1k = 0.04 + 0.06 * min(max(game_time, 0.0) / 2400.0, 1.0)
-    return per_1k * gold_lead / 1000.0
-
-
 def live_probability(pre_map: float, gold_lead: float, game_time: float) -> float:
-    logit = np.log(pre_map / (1.0 - pre_map)) + gold_logit_shift(gold_lead, game_time)
-    return float(1.0 / (1.0 + np.exp(-logit)))
+    """Trained in-game model when available, transparent heuristic otherwise."""
+    if _ingame_model is not None:
+        return model_probability(_ingame_model, pre_map, gold_lead, game_time)
+    return heuristic_probability(pre_map, gold_lead, game_time)
 
 
 def snapshot(store: ContextStore, odds: tuple[float, float] | None = None) -> None:
@@ -95,6 +97,8 @@ def main() -> None:
     odds = tuple(float(x) for x in args.odds.split(",")) if args.odds else None
 
     print("Загружаю данные и модель...", file=sys.stderr)
+    mode = "обученная модель" if _ingame_model is not None else "эвристика (модель не обучена)"
+    print(f"In-game оценка: {mode}", file=sys.stderr)
     store = ContextStore(DATA_DIR)
     while True:
         print(f"--- {time.strftime('%H:%M:%S')} ---")

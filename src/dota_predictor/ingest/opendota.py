@@ -256,6 +256,59 @@ def load_or_fetch_bans(path: Path, match_ids: list[int]) -> pd.DataFrame:
     return cached[cached["match_id"].isin(set(match_ids))]
 
 
+def fetch_gold_graphs(match_ids: list[int], chunk_size: int = 400, pause: float = 2.0) -> pd.DataFrame:
+    """Fetch per-minute radiant gold advantage arrays via /explorer."""
+    wanted = sorted(set(match_ids))
+    frames: list[pd.DataFrame] = []
+    with httpx.Client(base_url=BASE_URL, timeout=120) as client:
+        for i in range(0, len(wanted), chunk_size):
+            chunk = wanted[i : i + chunk_size]
+            sql = (
+                "SELECT match_id, radiant_gold_adv FROM matches "
+                f"WHERE match_id BETWEEN {chunk[0]} AND {chunk[-1]} "
+                "AND radiant_gold_adv IS NOT NULL"
+            )
+            resp = client.get("/explorer", params={"sql": sql})
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("err"):
+                raise RuntimeError(f"explorer error: {payload['err']}")
+            rows = pd.DataFrame(payload["rows"])
+            if not rows.empty:
+                rows = rows[rows["match_id"].isin(chunk)]
+                frames.append(rows)
+            print(f"  gold graphs: {i + len(chunk)}/{len(wanted)} matches requested")
+            time.sleep(pause)
+
+    if not frames:
+        return pd.DataFrame(columns=["match_id", "radiant_gold_adv"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_or_fetch_gold(path: Path, match_ids: list[int]) -> pd.DataFrame:
+    """Load cached gold graphs; fetch only ids never requested before."""
+    marker_path = path.with_name(path.stem + "_fetched.parquet")
+    cached = pd.read_parquet(path) if path.exists() else pd.DataFrame(
+        columns=["match_id", "radiant_gold_adv"]
+    )
+    fetched = set(pd.read_parquet(marker_path)["match_id"]) if marker_path.exists() else set()
+    missing = sorted(set(match_ids) - fetched)
+    if missing:
+        print(f"Fetching gold graphs for {len(missing)} matches via /explorer...")
+        fresh = fetch_gold_graphs(missing)
+        cached = pd.concat([cached, fresh], ignore_index=True)
+        cached["match_id"] = cached["match_id"].astype("int64")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cached.to_parquet(path, index=False)
+        pd.DataFrame({"match_id": sorted(fetched | set(missing))}).to_parquet(
+            marker_path, index=False
+        )
+    else:
+        print(f"All {len(match_ids)} gold graphs already cached in {path}")
+    cached["match_id"] = cached["match_id"].astype("int64")
+    return cached[cached["match_id"].isin(set(match_ids))]
+
+
 def load_or_fetch_patches(path: Path, refresh: bool = False) -> pd.DataFrame:
     """Patch list with release timestamps, from /constants/patch."""
     if path.exists() and not refresh:
