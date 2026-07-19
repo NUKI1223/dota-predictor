@@ -139,6 +139,59 @@ def extend_history(path: Path, matches: pd.DataFrame, days_back: int) -> pd.Data
     return merged
 
 
+def fetch_players(match_ids: list[int], chunk_size: int = 800, pause: float = 2.0) -> pd.DataFrame:
+    """Fetch player account ids per match via /explorer (player_matches).
+
+    Long format: match_id, account_id, is_radiant.
+    """
+    wanted = sorted(set(match_ids))
+    frames: list[pd.DataFrame] = []
+    with httpx.Client(base_url=BASE_URL, timeout=120) as client:
+        for i in range(0, len(wanted), chunk_size):
+            chunk = wanted[i : i + chunk_size]
+            sql = (
+                "SELECT match_id, account_id, player_slot FROM player_matches "
+                f"WHERE match_id BETWEEN {chunk[0]} AND {chunk[-1]}"
+            )
+            resp = client.get("/explorer", params={"sql": sql})
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("err"):
+                raise RuntimeError(f"explorer error: {payload['err']}")
+            rows = pd.DataFrame(payload["rows"])
+            if not rows.empty:
+                rows = rows[rows["match_id"].isin(chunk)].dropna(subset=["account_id"])
+                frames.append(rows)
+            print(f"  players: {i + len(chunk)}/{len(wanted)} matches requested")
+            time.sleep(pause)
+
+    players = pd.concat(frames, ignore_index=True)
+    players["is_radiant"] = players["player_slot"] < 128
+    players["account_id"] = players["account_id"].astype("int64")
+    return players[["match_id", "account_id", "is_radiant"]]
+
+
+def load_or_fetch_players(path: Path, match_ids: list[int]) -> pd.DataFrame:
+    """Load cached player rosters, fetching only matches missing from the cache."""
+    cached = pd.read_parquet(path) if path.exists() else pd.DataFrame(
+        columns=["match_id", "account_id", "is_radiant"]
+    )
+    missing = sorted(set(match_ids) - set(cached["match_id"]))
+    if missing:
+        print(f"Fetching player rosters for {len(missing)} matches via /explorer...")
+        fresh = fetch_players(missing)
+        cached = pd.concat([cached, fresh], ignore_index=True)
+        cached = cached.astype(
+            {"match_id": "int64", "account_id": "int64", "is_radiant": "bool"}
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cached.to_parquet(path, index=False)
+    else:
+        print(f"All {len(match_ids)} rosters already cached in {path}")
+    cached = cached.astype({"match_id": "int64", "account_id": "int64", "is_radiant": "bool"})
+    return cached[cached["match_id"].isin(set(match_ids))]
+
+
 def fetch_bans(match_ids: list[int], chunk_size: int = 800, pause: float = 2.0) -> pd.DataFrame:
     """Fetch hero bans for the given matches via /explorer (picks_bans table).
 

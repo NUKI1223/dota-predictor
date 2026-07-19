@@ -13,6 +13,7 @@ from pathlib import Path
 from dota_predictor.features.draft import build_draft_features
 from dota_predictor.features.elo import build_features, current_ratings
 from dota_predictor.features.meta import build_meta_features
+from dota_predictor.features.roster import build_roster_features
 from dota_predictor.ingest.opendota import (
     extend_history,
     load_or_fetch,
@@ -20,6 +21,7 @@ from dota_predictor.ingest.opendota import (
     load_or_fetch_drafts,
     load_or_fetch_leagues,
     load_or_fetch_patches,
+    load_or_fetch_players,
 )
 from dota_predictor.ingest.odds import compare_with_odds, load_odds_csv
 from dota_predictor.models.baseline import train_and_evaluate
@@ -30,6 +32,7 @@ DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 RAW_PATH = DATA_DIR / "raw" / "pro_matches.parquet"
 DRAFTS_PATH = DATA_DIR / "raw" / "drafts.parquet"
 BANS_PATH = DATA_DIR / "raw" / "bans.parquet"
+PLAYERS_PATH = DATA_DIR / "raw" / "players.parquet"
 LEAGUES_PATH = DATA_DIR / "raw" / "leagues.parquet"
 PATCHES_PATH = DATA_DIR / "raw" / "patches.parquet"
 FEATURES_PATH = DATA_DIR / "processed" / "features.parquet"
@@ -80,6 +83,9 @@ def main() -> None:
     bans = load_or_fetch_bans(BANS_PATH, matches["match_id"].tolist())
     print(f"Bans available for {bans['match_id'].nunique()}/{len(matches)} matches")
     features = build_meta_features(features, drafts, patches, bans)
+    players = load_or_fetch_players(PLAYERS_PATH, matches["match_id"].tolist())
+    print(f"Rosters available for {players['match_id'].nunique()}/{len(matches)} matches")
+    features = build_roster_features(features, players)
     FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True)
     features.to_parquet(FEATURES_PATH, index=False)
 
