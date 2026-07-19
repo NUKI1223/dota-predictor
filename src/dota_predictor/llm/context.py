@@ -139,6 +139,14 @@ class ContextStore:
             f"{self.names.get(tid_b, tid_b)}_wins": len(rows) - wins_a,
         }
 
+    def predict_radiant(self, tid_rad: int, tid_dire: int) -> float:
+        """Radiant win probability when sides are known (e.g. a live game)."""
+        x = pd.DataFrame(
+            [[self.elo[tid_rad] - self.elo[tid_dire], self._form(tid_rad) - self._form(tid_dire)]],
+            columns=FEATURE_COLS,
+        )
+        return float(self.model.predict_proba(x)[0][1])
+
     def predict(self, tid_a: int, tid_b: int) -> dict:
         """Win probability for team A; side unknown, so both orientations are averaged."""
         elo_diff = self.elo[tid_a] - self.elo[tid_b]
