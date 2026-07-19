@@ -16,6 +16,7 @@ from dota_predictor.features.meta import build_meta_features
 from dota_predictor.ingest.opendota import (
     extend_history,
     load_or_fetch,
+    load_or_fetch_bans,
     load_or_fetch_drafts,
     load_or_fetch_leagues,
     load_or_fetch_patches,
@@ -28,6 +29,7 @@ from dota_predictor.models.gbdt import train_and_evaluate_gbdt
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 RAW_PATH = DATA_DIR / "raw" / "pro_matches.parquet"
 DRAFTS_PATH = DATA_DIR / "raw" / "drafts.parquet"
+BANS_PATH = DATA_DIR / "raw" / "bans.parquet"
 LEAGUES_PATH = DATA_DIR / "raw" / "leagues.parquet"
 PATCHES_PATH = DATA_DIR / "raw" / "patches.parquet"
 FEATURES_PATH = DATA_DIR / "processed" / "features.parquet"
@@ -75,7 +77,9 @@ def main() -> None:
     features = build_features(matches)
     features, bag = build_draft_features(features, drafts)
     patches = load_or_fetch_patches(PATCHES_PATH, refresh=args.refresh)
-    features = build_meta_features(features, drafts, patches)
+    bans = load_or_fetch_bans(BANS_PATH, matches["match_id"].tolist())
+    print(f"Bans available for {bans['match_id'].nunique()}/{len(matches)} matches")
+    features = build_meta_features(features, drafts, patches, bans)
     FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True)
     features.to_parquet(FEATURES_PATH, index=False)
 

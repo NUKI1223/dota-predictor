@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from dota_predictor.features.meta import META_COLS
+from dota_predictor.features.meta import BAN_COLS, META_COLS
 from dota_predictor.models.baseline import FEATURE_COLS, evaluate, time_split
 
 DRAFT_COLS = ["hero_wr_diff", "hero_xp_diff"]
@@ -62,13 +62,20 @@ def train_and_evaluate_gbdt(
 
     out: dict = {}
     meta_cols = [c for c in META_COLS if c in df.columns]
+    ban_cols = [c for c in BAN_COLS if c in df.columns and df[c].notna().any()]
     configs = [
         ("gbdt elo+form", FEATURE_COLS),
         ("gbdt +draft aggregates", FEATURE_COLS + DRAFT_COLS),
         ("gbdt +patch/event meta", FEATURE_COLS + DRAFT_COLS + meta_cols),
-        ("gbdt +bag-of-heroes", FEATURE_COLS + DRAFT_COLS + meta_cols + hero_cols),
+        ("gbdt +bans", FEATURE_COLS + DRAFT_COLS + meta_cols + ban_cols),
+        ("gbdt +bag-of-heroes", FEATURE_COLS + DRAFT_COLS + meta_cols + ban_cols + hero_cols),
     ]
-    best_name = "gbdt +patch/event meta" if meta_cols else "gbdt +draft aggregates"
+    if ban_cols:
+        best_name = "gbdt +bans"
+    elif meta_cols:
+        best_name = "gbdt +patch/event meta"
+    else:
+        best_name = "gbdt +draft aggregates"
     for name, cols in configs:
         model, impl = _make_model()
         if impl == "catboost":

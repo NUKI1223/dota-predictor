@@ -139,6 +139,70 @@ def extend_history(path: Path, matches: pd.DataFrame, days_back: int) -> pd.Data
     return merged
 
 
+def fetch_bans(match_ids: list[int], chunk_size: int = 800, pause: float = 2.0) -> pd.DataFrame:
+    """Fetch hero bans for the given matches via /explorer (picks_bans table).
+
+    Long format: match_id, hero_id, banned_by_radiant.
+    """
+    wanted = sorted(set(match_ids))
+    frames: list[pd.DataFrame] = []
+    with httpx.Client(base_url=BASE_URL, timeout=120) as client:
+        for i in range(0, len(wanted), chunk_size):
+            chunk = wanted[i : i + chunk_size]
+            sql = (
+                "SELECT match_id, hero_id, team FROM picks_bans "
+                f"WHERE is_pick = false AND match_id BETWEEN {chunk[0]} AND {chunk[-1]}"
+            )
+            resp = client.get("/explorer", params={"sql": sql})
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("err"):
+                raise RuntimeError(f"explorer error: {payload['err']}")
+            rows = pd.DataFrame(payload["rows"])
+            if not rows.empty:
+                rows = rows[rows["match_id"].isin(chunk)]
+                frames.append(rows)
+            print(f"  bans: {i + len(chunk)}/{len(wanted)} matches requested")
+            time.sleep(pause)
+
+    if not frames:
+        return pd.DataFrame(columns=["match_id", "hero_id", "banned_by_radiant"])
+    bans = pd.concat(frames, ignore_index=True)
+    bans["banned_by_radiant"] = bans["team"] == 0
+    return bans[["match_id", "hero_id", "banned_by_radiant"]]
+
+
+def load_or_fetch_bans(path: Path, match_ids: list[int]) -> pd.DataFrame:
+    """Load cached bans, fetching only matches never requested before.
+
+    Some matches legitimately have no ban records, so a separate marker file
+    tracks which ids were already requested — otherwise they would be
+    re-fetched on every run.
+    """
+    marker_path = path.with_name(path.stem + "_fetched.parquet")
+    cached = pd.read_parquet(path) if path.exists() else pd.DataFrame(
+        columns=["match_id", "hero_id", "banned_by_radiant"]
+    )
+    fetched = set(pd.read_parquet(marker_path)["match_id"]) if marker_path.exists() else set()
+    missing = sorted(set(match_ids) - fetched)
+    if missing:
+        print(f"Fetching bans for {len(missing)} matches via /explorer...")
+        fresh = fetch_bans(missing)
+        cached = pd.concat([cached, fresh], ignore_index=True)
+        cached = cached.astype(
+            {"match_id": "int64", "hero_id": "int64", "banned_by_radiant": "bool"}
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cached.to_parquet(path, index=False)
+        pd.DataFrame({"match_id": sorted(fetched | set(missing))}).to_parquet(
+            marker_path, index=False
+        )
+    else:
+        print(f"All {len(match_ids)} ban records already cached in {path}")
+    cached = cached.astype({"match_id": "int64", "hero_id": "int64", "banned_by_radiant": "bool"})
+    return cached[cached["match_id"].isin(set(match_ids))]
+
+
 def load_or_fetch_patches(path: Path, refresh: bool = False) -> pd.DataFrame:
     """Patch list with release timestamps, from /constants/patch."""
     if path.exists() and not refresh:
