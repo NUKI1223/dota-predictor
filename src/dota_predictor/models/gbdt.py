@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from dota_predictor.features.meta import META_COLS
 from dota_predictor.models.baseline import FEATURE_COLS, evaluate, time_split
 
 DRAFT_COLS = ["hero_wr_diff", "hero_xp_diff"]
@@ -60,11 +61,15 @@ def train_and_evaluate_gbdt(
           f"({len(fit)} fit / {len(val)} early-stop val / {len(test)} test)")
 
     out: dict = {}
-    for name, cols in [
+    meta_cols = [c for c in META_COLS if c in df.columns]
+    configs = [
         ("gbdt elo+form", FEATURE_COLS),
         ("gbdt +draft aggregates", FEATURE_COLS + DRAFT_COLS),
-        ("gbdt +bag-of-heroes", FEATURE_COLS + DRAFT_COLS + hero_cols),
-    ]:
+        ("gbdt +patch/event meta", FEATURE_COLS + DRAFT_COLS + meta_cols),
+        ("gbdt +bag-of-heroes", FEATURE_COLS + DRAFT_COLS + meta_cols + hero_cols),
+    ]
+    best_name = "gbdt +patch/event meta" if meta_cols else "gbdt +draft aggregates"
+    for name, cols in configs:
         model, impl = _make_model()
         if impl == "catboost":
             model.fit(fit[cols], y_fit, eval_set=(val[cols], y_val))
@@ -72,7 +77,7 @@ def train_and_evaluate_gbdt(
             model.fit(train[cols], train["radiant_win"].to_numpy())
         proba = model.predict_proba(test[cols])[:, 1]
         print(evaluate(f"{name} [{impl}]", y_test, proba))
-        if cols == FEATURE_COLS + DRAFT_COLS:
+        if name == best_name:
             out = {
                 "y_val": y_val,
                 "val_proba": model.predict_proba(val[cols])[:, 1],
@@ -80,4 +85,10 @@ def train_and_evaluate_gbdt(
                 "test_proba": proba,
                 "test": test,
             }
+            if impl == "catboost":
+                importance = sorted(
+                    zip(cols, model.get_feature_importance()), key=lambda kv: -kv[1]
+                )
+                print("  feature importance: "
+                      + ", ".join(f"{c}={v:.1f}" for c, v in importance))
     return out

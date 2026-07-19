@@ -139,6 +139,24 @@ def extend_history(path: Path, matches: pd.DataFrame, days_back: int) -> pd.Data
     return merged
 
 
+def load_or_fetch_patches(path: Path, refresh: bool = False) -> pd.DataFrame:
+    """Patch list with release timestamps, from /constants/patch."""
+    if path.exists() and not refresh:
+        return pd.read_parquet(path)
+    print("Fetching patch constants from OpenDota...")
+    with httpx.Client(base_url=BASE_URL, timeout=60) as client:
+        resp = client.get("/constants/patch")
+        resp.raise_for_status()
+        patches = pd.DataFrame(resp.json())
+    patches["start_time"] = (
+        pd.to_datetime(patches["date"], format="ISO8601", utc=True).astype("int64") // 10**9
+    )
+    patches = patches[["id", "name", "start_time"]].sort_values("start_time")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    patches.to_parquet(path, index=False)
+    return patches
+
+
 def load_or_fetch_leagues(path: Path, refresh: bool = False) -> pd.DataFrame:
     """League directory with tier: premium / professional / amateur / excluded."""
     if path.exists() and not refresh:
